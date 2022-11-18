@@ -27,6 +27,9 @@ except ImportError:
     __version__ = "unknown"
 
 
+LAST_FOCUSED_CONTAINER = None
+
+
 def temp_dir():
     if os.getenv("TMPDIR"):
         return os.getenv("TMPDIR")
@@ -56,6 +59,45 @@ def output_name(con):
             return p.name
         else:
             return output_name(p)
+
+def experimental_switch_splitting(i3, e, debug, outputs, workspaces, depth_limit, splitwidth, splitheight, splitratio):
+    global LAST_FOCUSED_CONTAINER
+    con = i3.get_tree().find_focused()
+
+    if (
+        e.change == "new"
+        and con.fullscreen_mode != 1
+        and con.parent.layout != "stacked"
+        and con.parent.layout != "tabbed"
+        and len(con.parent.nodes) > 1
+    ):
+        # set new layout depending on last focused container
+        new_layout = "splith"
+        if LAST_FOCUSED_CONTAINER.rect.width/LAST_FOCUSED_CONTAINER.rect.height < splitratio:
+            new_layout = "splitv"
+
+        # change its layout
+        result = LAST_FOCUSED_CONTAINER.command(new_layout)
+        if debug and result[0].success:
+            print("Debug: Switched to {}".format(new_layout), file=sys.stderr)
+        elif debug:
+            print(
+                "Error: Switch failed with err {}".format(result[0].error),
+                file=sys.stderr,
+            )
+
+        # move current container to last focused container
+        LAST_FOCUSED_CONTAINER.command("mark foo")
+        result = con.command("move container to mark foo")
+        LAST_FOCUSED_CONTAINER.command("unmark foo")
+        if debug and not result[0].success:
+            print(
+                "Error: Move to new parent failed with err {}".format(result[0].error),
+                file=sys.stderr,
+            )
+
+    # set current focused container
+    LAST_FOCUSED_CONTAINER = i3.get_tree().find_focused()
 
 
 def switch_splitting(i3, e, debug, outputs, workspaces, depth_limit, splitwidth, splitheight, splitratio):
@@ -184,6 +226,7 @@ def main():
                         'try "1.61", for golden ratio - window has to be 61%% wider for left/right split; default: 1.0;',
                         type=float,
                         default=1.0, )
+    parser.add_argument("--experimental", action="store_true", default=False)
     """
     Changing event subscription has already been the objective of several pull request. To avoid doing this again
     and again, let's allow to specify them in the `--events` argument.
@@ -216,14 +259,14 @@ def main():
         sys.exit(1)
 
     handler = partial(
-        switch_splitting,
+        switch_splitting if not args.experimental else experimental_switch_splitting,
         debug=args.debug,
         outputs=args.outputs,
         workspaces=args.workspaces,
         depth_limit=args.limit,
         splitwidth=args.splitwidth,
         splitheight=args.splitheight,
-        splitratio=args.splitratio
+        splitratio=args.splitratio,
     )
     i3 = Connection()
     for e in args.events:
